@@ -19,6 +19,7 @@
     "@types/gapi.auth2": "^0.0.61",
     "@types/node": "^22.14.0",
     "@types/react-google-recaptcha": "^2.1.9",
+    "@vercel/node": "^5.5.16",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"

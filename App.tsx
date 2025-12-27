@@ -230,14 +230,27 @@ const App: React.FC = () => {
   const [recordingTime, setRecordingTime] = useState(0);
   const [processingStatus, setProcessingStatus] = useState({ step: '', progress: 0 });
 
-  const [formData, setFormData] = useState<IdeationData>({
+  const initialFormData: IdeationData = {
     projectName: '', problemStatement: '', targetUser: '', solutionSummary: '',
     constraints: '', differentiation: '', risks: '', nextAction: '', tags: '', images: [], audioTranscript: ''
-  });
+  };
+
+  const [formData, setFormData] = useState<IdeationData>(initialFormData);
 
   const [personData, setPersonData] = useState<PersonData>({
     name: '', expertise: '', passions: '', challenges: '', lifestyle: '', manualExtension: ''
   });
+
+  // Reset form for new ideation
+  const resetForNewIdeation = () => {
+    setFormData(initialFormData);
+    setNormalizedResult(null);
+    setAudioBlob(null);
+    setProcessingStatus({ step: '', progress: 0 });
+    setDebugLog([]);
+    setError(null);
+    console.log("[App] Form reset for new ideation");
+  };
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -718,7 +731,16 @@ const App: React.FC = () => {
 
               setLastProvider(usedProvider);
 
-              // Step 2: Upload images with progress
+              // Step 2: Generate session UUID FIRST (for linking all files)
+              const sessionUUID = generateUUID();
+              const sessionUUID8 = sessionUUID.substring(0, 8);
+              const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+              const authorPrefix = user?.email?.replace('@gmail.com', '').toUpperCase() || 'UNKNOWN';
+              const projectSlug = formData.projectName.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-]/g, '').substring(0, 30);
+
+              setDebugLog(p => [...p, `🔗 Session: ${sessionUUID8} | Projekt: ${projectSlug}`]);
+
+              // Step 3: Upload images with progress and proper naming
               let imageUrls: string[] = [];
               const imagesToUpload = formData.images.filter(img => img && img.length > 0);
               const totalImages = imagesToUpload.length;
@@ -735,7 +757,9 @@ const App: React.FC = () => {
                     setDebugLog(p => [...p, `📤 Bild ${uploadedCount}/${totalImages} (${percent}%)...`]);
 
                     try {
-                      const url = await uploadImageToDrive(img, `${formData.projectName}_foto_${i + 1}.jpg`, user.accessToken);
+                      // New naming format: {YYYYMMDD}_{AUTHOR}_{PROJECT}_{UUID8}_foto{N}.jpg
+                      const imageFileName = `${dateStr}_${authorPrefix}_${projectSlug}_${sessionUUID8}_foto${i + 1}.jpg`;
+                      const url = await uploadImageToDrive(img, imageFileName, user.accessToken, user.email);
                       imageUrls.push(url);
                       setDebugLog(p => [...p, `✅ Bild ${uploadedCount} hochgeladen`]);
                     } catch (imgErr: any) {
@@ -746,13 +770,12 @@ const App: React.FC = () => {
                 }
               }
 
-              // Step 3: Merge and create final result with UUIDs
+              // Step 4: Merge and create final result with UUIDs
               const entryUUID = generateUUID();
-              const sessionUUID = generateUUID(); // Links project with its photos
               const finalResult = {
                 ...normalizedData,
                 idea_id: entryUUID,
-                session_uuid: sessionUUID, // For linking project <-> photos
+                session_uuid: sessionUUID, // Already generated above - links project <-> photos
                 created_by_email: user?.email || '',
                 image_url_1: imageUrls[0] || '',
                 image_url_2: imageUrls[1] || '',
@@ -763,15 +786,17 @@ const App: React.FC = () => {
 
               console.log("Final Result with UUID:", finalResult);
               setNormalizedResult(finalResult);
-              setDebugLog(p => [...p, `🔑 UUID: ${entryUUID.substring(0, 8)}...`]);
+              setDebugLog(p => [...p, `🔑 Entry: ${entryUUID.substring(0, 8)}...`]);
 
-              // Step 4: Save to Google Drive
+              // Step 5: Save to Google Drive with improved filename
               if (user?.accessToken) {
                 setProcessingStatus({ step: 'Speichere CSV in Google Drive...', progress: 90 });
-                setDebugLog(p => [...p, "💾 Speichere CSV in Google Drive..."]);
+                // CSV filename: {YYYYMMDD}_{AUTHOR}_{PROJECT}_{UUID8}.csv
+                const csvFileName = `${dateStr}_${authorPrefix}_${projectSlug}_${sessionUUID8}.csv`;
+                setDebugLog(p => [...p, `💾 Speichere: ${csvFileName}`]);
 
                 try {
-                  await saveToGoogleDrive(finalResult, user.accessToken);
+                  await saveToGoogleDrive(finalResult, user.accessToken, user.email, csvFileName);
                   setDebugLog(p => [...p, "✅ Google Drive Sync erfolgreich!"]);
                 } catch (driveErr: any) {
                   console.error("Drive save failed:", driveErr);
@@ -820,9 +845,17 @@ const App: React.FC = () => {
           <div className="bg-white p-12 rounded-[3rem] shadow-2xl text-center border-4 border-green-50">
             <div className="w-24 h-24 bg-green-100 text-green-600 rounded-full mx-auto mb-8 flex items-center justify-center text-5xl">✓</div>
             <h2 className="text-4xl font-black text-slate-900 mb-8">Synchronisiert</h2>
-            <div className="flex gap-4">
-              <button onClick={() => downloadCsvLocally(normalizedResult!)} className="flex-1 py-5 bg-slate-100 rounded-3xl font-black uppercase text-[10px] tracking-widest">CSV Export</button>
-              <button onClick={() => setStep(WizardStep.DASHBOARD)} className="flex-1 py-5 bg-slate-900 text-white rounded-3xl font-black uppercase text-[10px] tracking-widest">Home</button>
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-4">
+                <button onClick={() => downloadCsvLocally(normalizedResult!)} className="flex-1 py-5 bg-slate-100 rounded-3xl font-black uppercase text-[10px] tracking-widest">CSV Export</button>
+                <button onClick={() => { resetForNewIdeation(); setStep(WizardStep.DASHBOARD); }} className="flex-1 py-5 bg-slate-900 text-white rounded-3xl font-black uppercase text-[10px] tracking-widest">Home</button>
+              </div>
+              <button
+                onClick={() => { resetForNewIdeation(); setStep(WizardStep.CONTEXT); }}
+                className="w-full py-5 bg-indigo-600 text-white rounded-3xl font-black uppercase text-[10px] tracking-widest hover:bg-indigo-700 transition-colors"
+              >
+                ✨ Neue Idee erfassen
+              </button>
             </div>
           </div>
         );

@@ -1,8 +1,29 @@
 
 import { NormalizedIdea } from "../types";
 
-// Target folder for all E_Luma Companion uploads
-const GOOGLE_DRIVE_FOLDER_ID = "1KvSOQbj6Ff5h7-Md9usct_mGayyP42Qx";
+// Hardcoded folder IDs for each user (pre-existing shared folders)
+const USER_FOLDER_IDS: Record<string, string> = {
+  'eluma0001@gmail.com': '1KvSOQbj6Ff5h7-Md9usct_mGayyP42Qx',
+  'eluma0002@gmail.com': '1HRFd_oDZs1PFRyDFpwixR8fFqpObDHey',
+};
+
+
+// Default fallback folder
+const DEFAULT_FOLDER_ID = '1KvSOQbj6Ff5h7-Md9usct_mGayyP42Qx';
+
+/**
+ * Get the folder ID for a specific user.
+ * Uses hardcoded folder IDs since folders are pre-created and shared.
+ */
+export const getUserFolderId = (userEmail: string): string => {
+  const folderId = USER_FOLDER_IDS[userEmail.toLowerCase()];
+  if (folderId) {
+    console.log(`[Drive] Using folder for ${userEmail}: ${folderId}`);
+    return folderId;
+  }
+  console.warn(`[Drive] No folder configured for ${userEmail}, using default`);
+  return DEFAULT_FOLDER_ID;
+};
 
 /**
  * Hilfsfunktion zur Behandlung von Google API-Antworten und Fehlern.
@@ -35,13 +56,17 @@ const handleResponse = async (response: Response) => {
 export const uploadImageToDrive = async (
   base64Data: string,
   fileName: string,
-  accessToken: string
+  accessToken: string,
+  userEmail?: string
 ): Promise<string> => {
   try {
+    // Get user-specific folder
+    const folderId = userEmail ? getUserFolderId(userEmail) : DEFAULT_FOLDER_ID;
+
     const metadata = {
       name: fileName,
       mimeType: 'image/jpeg',
-      parents: [GOOGLE_DRIVE_FOLDER_ID],
+      parents: [folderId],
     };
 
     const base64Content = base64Data.split(',')[1];
@@ -79,10 +104,12 @@ export const uploadImageToDrive = async (
 
 export const saveToGoogleDrive = async (
   idea: NormalizedIdea,
-  accessToken: string
+  accessToken: string,
+  userEmail?: string,
+  customFileName?: string
 ): Promise<{ fileId: string; webContentLink?: string }> => {
   const headers = [
-    "idea_id", "created_at", "created_by_email", "project_name",
+    "idea_id", "session_uuid", "created_at", "created_by_email", "project_name",
     "problem_statement", "target_user", "solution_summary", "constraints",
     "differentiation", "risks", "next_action", "status", "priority",
     "tags", "source", "version",
@@ -96,14 +123,18 @@ export const saveToGoogleDrive = async (
   });
 
   const csvContent = headers.join(",") + "\n" + values.join(",") + "\n";
-  const dateStr = new Date().toISOString().split('T')[0];
-  const fileName = `IDEATION_${idea.project_name.replace(/\s+/g, '_')}_${dateStr}.csv`;
+
+  // Use custom filename if provided, otherwise generate default
+  const fileName = customFileName || `IDEATION_${idea.project_name.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
 
   try {
+    // Get user-specific folder
+    const folderId = userEmail ? getUserFolderId(userEmail) : DEFAULT_FOLDER_ID;
+
     const metadata = {
       name: fileName,
       mimeType: 'text/csv',
-      parents: [GOOGLE_DRIVE_FOLDER_ID],
+      parents: [folderId],
     };
 
     const form = new FormData();

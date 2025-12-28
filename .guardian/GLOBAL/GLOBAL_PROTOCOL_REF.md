@@ -1,1 +1,1 @@
-> Inherits from Master GLOBAL_PROTOCOL_V12.4.md
+> Inherits from Master GLOBAL_PROTOCOL_V14.0.md

@@ -49,6 +49,7 @@ export interface VoiceExtraction {
 
 export interface NormalizedIdea {
   idea_id: string;
+  session_uuid?: string;
   created_at: string;
   created_by_email: string;
   project_name: string;
@@ -72,6 +73,15 @@ export interface NormalizedIdea {
   audio_transcript: string; // New field for the CSV export
 }
 
+// Represents a saved idea loaded from Google Drive
+export interface SavedIdea {
+  fileId: string;           // Google Drive file ID (for update/delete)
+  fileName: string;         // Original filename
+  createdTime: string;      // ISO timestamp from Drive
+  data: NormalizedIdea;     // Parsed CSV content
+  thumbnailUrl?: string;    // First image URL for preview
+}
+
 export enum WizardStep {
   DASHBOARD = 0,
   CONTEXT = 1,
@@ -92,5 +102,7 @@ export enum WizardStep {
   SETTINGS = 16,
   PERSON_PROFILE = 17,
   PERSON_CHALLENGES = 18,
-  PERSON_SYNTHESIS = 19
+  PERSON_SYNTHESIS = 19,
+  MY_IDEAS = 20,
+  IDEA_EDIT = 21
 }

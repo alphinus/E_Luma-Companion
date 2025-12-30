@@ -1,8 +1,9 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { UserProfile, IdeationData, WizardStep, NormalizedIdea, PromptPreset, VoiceExtraction, PersonData } from './types';
+import { UserProfile, IdeationData, WizardStep, NormalizedIdea, PromptPreset, VoiceExtraction, PersonData, SavedIdea } from './types';
 import { llmService, ProviderType } from './services/llmService';
-import { saveToGoogleDrive, uploadImageToDrive, downloadCsvLocally, listIdeationFiles, getFileContent } from './services/googleDriveService';
+import { saveToGoogleDrive, uploadImageToDrive, downloadCsvLocally, listIdeationFilesForUser, getFileContent, updateFileInDrive, parseCSVToIdea } from './services/googleDriveService';
+
 
 
 const GOOGLE_CLIENT_ID = "1089918924198-0nnc8nuradga903ifa0vbn3c2usuan4p.apps.googleusercontent.com";
@@ -246,6 +247,20 @@ const App: React.FC = () => {
     name: '', expertise: '', passions: '', challenges: '', lifestyle: '', manualExtension: ''
   });
 
+  // ===== MY IDEAS FEATURE STATES =====
+  const [savedIdeas, setSavedIdeas] = useState<SavedIdea[]>([]);
+  const [loadingIdeas, setLoadingIdeas] = useState(false);
+  const [editMode, setEditMode] = useState<{
+    active: boolean;
+    fileId: string | null;
+    fileName: string | null;
+    sessionUUID: string | null;
+    originalImageUrls: string[];
+    wantsToChangeImages: boolean;
+  } | null>(null);
+  const [showImageChangeModal, setShowImageChangeModal] = useState(false);
+  const [pendingEditIdea, setPendingEditIdea] = useState<SavedIdea | null>(null);
+
   // Reset form for new ideation
   const resetForNewIdeation = () => {
     setFormData(initialFormData);
@@ -255,12 +270,108 @@ const App: React.FC = () => {
     setError(null);
     setRecordingTime(0);
     audioChunksRef.current = [];
+    // Clear edit mode
+    setEditMode(null);
+    setPendingEditIdea(null);
     console.log("[App] Form reset for new ideation");
+  };
+
+  // ===== MY IDEAS FUNCTIONS =====
+  const loadMyIdeas = async () => {
+    if (!user?.accessToken || !user?.email) return;
+
+    setLoadingIdeas(true);
+    setError(null);
+
+    try {
+      const files = await listIdeationFilesForUser(user.accessToken, user.email);
+      const ideas: SavedIdea[] = [];
+
+      // Limit to last 20 for performance
+      for (const file of files.slice(0, 20)) {
+        try {
+          const content = await getFileContent(file.id, user.accessToken);
+          const parsed = parseCSVToIdea(content);
+          ideas.push({
+            fileId: file.id,
+            fileName: file.name,
+            createdTime: file.createdTime,
+            data: parsed,
+            thumbnailUrl: parsed.image_url_1 || undefined
+          });
+        } catch (parseErr) {
+          console.warn(`[MyIdeas] Failed to parse ${file.name}:`, parseErr);
+        }
+      }
+
+      setSavedIdeas(ideas);
+      console.log(`[MyIdeas] Loaded ${ideas.length} ideas`);
+    } catch (err: any) {
+      console.error("[MyIdeas] Load error:", err);
+      setError("Ideen konnten nicht geladen werden: " + err.message);
+    } finally {
+      setLoadingIdeas(false);
+    }
+  };
+
+  const openIdeaForEdit = (idea: SavedIdea) => {
+    // Store the idea and show the image change modal
+    setPendingEditIdea(idea);
+    setShowImageChangeModal(true);
+  };
+
+  const confirmEditIdea = (changeImages: boolean) => {
+    if (!pendingEditIdea) return;
+
+    const idea = pendingEditIdea;
+    const originalImageUrls = [
+      idea.data.image_url_1,
+      idea.data.image_url_2,
+      idea.data.image_url_3,
+      idea.data.image_url_4,
+      idea.data.image_url_5,
+    ].filter(url => url && url.length > 0);
+
+    // Set edit mode
+    setEditMode({
+      active: true,
+      fileId: idea.fileId,
+      fileName: idea.fileName,
+      sessionUUID: idea.data.session_uuid || null,
+      originalImageUrls: originalImageUrls,
+      wantsToChangeImages: changeImages,
+    });
+
+    // Populate form with existing data
+    setFormData({
+      projectName: idea.data.project_name || '',
+      problemStatement: idea.data.problem_statement || '',
+      targetUser: idea.data.target_user || '',
+      solutionSummary: idea.data.solution_summary || '',
+      constraints: idea.data.constraints || '',
+      differentiation: idea.data.differentiation || '',
+      risks: idea.data.risks || '',
+      nextAction: idea.data.next_action || '',
+      tags: idea.data.tags || '',
+      audioTranscript: idea.data.audio_transcript || '',
+      // If keeping images, show them as preview (they're URLs, not base64)
+      // If changing images, start with empty
+      images: changeImages ? [] : originalImageUrls,
+    });
+
+    // Store the normalized result for reference
+    setNormalizedResult(idea.data);
+
+    // Close modal and go to IDEA_EDIT (which uses same UI as REVIEW)
+    setShowImageChangeModal(false);
+    setPendingEditIdea(null);
+    setStep(WizardStep.IDEA_EDIT);
   };
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+
 
 
   const tokenClientRef = useRef<any>(null);
@@ -589,6 +700,14 @@ const App: React.FC = () => {
                   Sprachnotiz <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
                 </button>
               </div>
+
+              {/* Meine Ideen Button */}
+              <button
+                onClick={() => { loadMyIdeas(); setStep(WizardStep.MY_IDEAS); }}
+                className="w-full mt-4 py-4 bg-emerald-600 text-white rounded-3xl font-black shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-emerald-700"
+              >
+                📚 Meine Ideen ansehen
+              </button>
             </div>
           </div>
         );
@@ -864,6 +983,311 @@ const App: React.FC = () => {
               </button>
             </div>
           </div>
+        );
+
+      case WizardStep.MY_IDEAS:
+        return (
+          <div className="animate-in fade-in duration-500">
+            {/* Image Change Modal */}
+            {showImageChangeModal && pendingEditIdea && (
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                <div className="bg-white rounded-3xl p-8 shadow-2xl max-w-md w-full mx-4 animate-in zoom-in-95 duration-300">
+                  <h3 className="text-xl font-black text-slate-900 mb-2 text-center">Idee bearbeiten</h3>
+                  <p className="text-slate-500 text-sm mb-4 text-center">
+                    <strong>{pendingEditIdea.data.project_name}</strong>
+                  </p>
+
+                  {/* Show existing images preview */}
+                  {pendingEditIdea.thumbnailUrl && (
+                    <div className="mb-6 flex justify-center">
+                      <img
+                        src={pendingEditIdea.thumbnailUrl}
+                        alt="Preview"
+                        className="w-24 h-24 object-cover rounded-xl border-2 border-slate-100"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    </div>
+                  )}
+
+                  <p className="text-slate-400 text-sm mb-6 text-center">
+                    Möchtest du die Bilder ändern?
+                  </p>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => confirmEditIdea(true)}
+                      className="flex-1 py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-indigo-700 transition-colors"
+                    >
+                      Ja, neue Bilder
+                    </button>
+                    <button
+                      onClick={() => confirmEditIdea(false)}
+                      className="flex-1 py-4 bg-slate-100 text-slate-700 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-colors"
+                    >
+                      Nein, behalten
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => { setShowImageChangeModal(false); setPendingEditIdea(null); }}
+                    className="w-full mt-4 py-3 text-slate-400 font-bold text-sm hover:text-slate-600 transition-colors"
+                  >
+                    Abbrechen
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white p-8 rounded-[2.5rem] shadow-xl border border-slate-100">
+              <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setStep(WizardStep.DASHBOARD)}
+                    className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center hover:bg-slate-200 transition-colors"
+                  >
+                    <svg className="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
+                    </svg>
+                  </button>
+                  <h2 className="text-2xl font-black text-slate-900">📚 Meine Ideen</h2>
+                </div>
+                <button
+                  onClick={loadMyIdeas}
+                  className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-200 transition-colors"
+                  disabled={loadingIdeas}
+                >
+                  {loadingIdeas ? '...' : '🔄 Aktualisieren'}
+                </button>
+              </div>
+
+              {loadingIdeas ? (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4"></div>
+                  <p className="text-slate-400 font-medium">Lade Ideen...</p>
+                </div>
+              ) : savedIdeas.length === 0 ? (
+                <div className="text-center py-16">
+                  <div className="text-6xl mb-4">📭</div>
+                  <p className="text-slate-400 font-medium mb-6">Noch keine Ideen gespeichert</p>
+                  <button
+                    onClick={() => setStep(WizardStep.DASHBOARD)}
+                    className="px-6 py-3 bg-indigo-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest"
+                  >
+                    Erste Idee erfassen
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {savedIdeas.map((idea) => (
+                      <button
+                        key={idea.fileId}
+                        onClick={() => openIdeaForEdit(idea)}
+                        className="group bg-slate-50 rounded-2xl p-4 text-left hover:bg-indigo-50 hover:shadow-lg transition-all border-2 border-transparent hover:border-indigo-200"
+                      >
+                        {/* Thumbnail */}
+                        <div className="aspect-video bg-slate-200 rounded-xl mb-3 overflow-hidden flex items-center justify-center">
+                          {idea.thumbnailUrl ? (
+                            <img
+                              src={idea.thumbnailUrl}
+                              alt={idea.data.project_name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).style.display = 'none';
+                                (e.target as HTMLImageElement).parentElement!.innerHTML = '<span class="text-3xl">💡</span>';
+                              }}
+                            />
+                          ) : (
+                            <span className="text-3xl">💡</span>
+                          )}
+                        </div>
+
+                        {/* Title */}
+                        <h3 className="font-black text-slate-900 text-sm truncate mb-1 group-hover:text-indigo-700">
+                          {idea.data.project_name || 'Ohne Titel'}
+                        </h3>
+
+                        {/* Date */}
+                        <p className="text-[10px] text-slate-400 uppercase tracking-widest">
+                          {new Date(idea.createdTime).toLocaleDateString('de-DE', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric'
+                          })}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+
+                  <p className="text-center text-slate-400 text-xs mt-6">
+                    {savedIdeas.length} {savedIdeas.length === 1 ? 'Idee' : 'Ideen'} gefunden
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        );
+
+      case WizardStep.IDEA_EDIT:
+        return (
+          <WizardCard
+            title={editMode?.wantsToChangeImages ? "Bearbeiten (+ Bilder)" : "Bearbeiten"}
+            description={`${formData.projectName} wird aktualisiert`}
+            onNext={async () => {
+              if (!editMode?.active || !editMode.fileId || !user?.accessToken) {
+                setError("Bearbeitungsmodus nicht aktiv");
+                return;
+              }
+
+              setStep(WizardStep.PROCESSING);
+              setDebugLog(["🔄 Update-Workflow gestartet..."]);
+
+              try {
+                // Step 1: Handle image uploads if changing images
+                let imageUrls: string[] = editMode.originalImageUrls;
+
+                if (editMode.wantsToChangeImages) {
+                  const imagesToUpload = formData.images.filter(img => img && img.length > 0 && img.startsWith('data:'));
+
+                  if (imagesToUpload.length > 0) {
+                    setDebugLog(p => [...p, `📷 Lade ${imagesToUpload.length} neue(s) Bild(er) hoch...`]);
+                    imageUrls = [];
+
+                    const sessionUUID8 = (editMode.sessionUUID || generateUUID()).substring(0, 8);
+                    const dateStr = new Date().toISOString().split('T')[0].replace(/-/g, '');
+                    const authorPrefix = user.email?.replace('@gmail.com', '').toUpperCase() || 'UNKNOWN';
+                    const projectSlug = formData.projectName.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-]/g, '').substring(0, 30);
+
+                    for (let i = 0; i < formData.images.length; i++) {
+                      const img = formData.images[i];
+                      if (img && img.startsWith('data:')) {
+                        try {
+                          const imageFileName = `${dateStr}_${authorPrefix}_${projectSlug}_${sessionUUID8}_foto${i + 1}.jpg`;
+                          const url = await uploadImageToDrive(img, imageFileName, user.accessToken, user.email);
+                          imageUrls.push(url);
+                          setDebugLog(p => [...p, `✅ Bild ${imageUrls.length} hochgeladen`]);
+                        } catch (imgErr: any) {
+                          setDebugLog(p => [...p, `❌ Bild Upload fehlgeschlagen: ${imgErr.message}`]);
+                        }
+                      }
+                    }
+                  }
+                }
+
+                // Step 2: Build updated idea
+                setDebugLog(p => [...p, "📝 Erstelle aktualisierte Daten..."]);
+                const updatedIdea: NormalizedIdea = {
+                  idea_id: normalizedResult?.idea_id || generateUUID(),
+                  session_uuid: editMode.sessionUUID || normalizedResult?.session_uuid || '',
+                  created_at: normalizedResult?.created_at || new Date().toISOString(),
+                  created_by_email: user.email || '',
+                  project_name: formData.projectName,
+                  problem_statement: formData.problemStatement,
+                  target_user: formData.targetUser,
+                  solution_summary: formData.solutionSummary,
+                  constraints: formData.constraints,
+                  differentiation: formData.differentiation,
+                  risks: formData.risks,
+                  next_action: formData.nextAction,
+                  status: normalizedResult?.status || 'updated',
+                  priority: normalizedResult?.priority || 'medium',
+                  tags: formData.tags,
+                  source: normalizedResult?.source || 'edit',
+                  version: String(parseInt(normalizedResult?.version || '1') + 1) + '.0',
+                  image_url_1: imageUrls[0] || '',
+                  image_url_2: imageUrls[1] || '',
+                  image_url_3: imageUrls[2] || '',
+                  image_url_4: imageUrls[3] || '',
+                  image_url_5: imageUrls[4] || '',
+                  audio_transcript: formData.audioTranscript || '',
+                };
+
+                // Step 3: Update file in Drive
+                setDebugLog(p => [...p, `💾 Aktualisiere Datei ${editMode.fileName}...`]);
+                setProcessingStatus({ step: 'Speichere Änderungen...', progress: 80 });
+
+                await updateFileInDrive(editMode.fileId, updatedIdea, user.accessToken);
+                setDebugLog(p => [...p, "✅ Google Drive Update erfolgreich!"]);
+
+                setNormalizedResult(updatedIdea);
+                setProcessingStatus({ step: 'Abgeschlossen!', progress: 100 });
+
+                await new Promise(resolve => setTimeout(resolve, 500));
+                setStep(WizardStep.SUCCESS);
+
+              } catch (err: any) {
+                console.error("Edit save error:", err);
+                setDebugLog(p => [...p, `❌ FEHLER: ${err.message}`]);
+                setError("Speichern fehlgeschlagen: " + err.message);
+                setTimeout(() => setStep(WizardStep.IDEA_EDIT), 3000);
+              }
+            }}
+            onBack={() => { resetForNewIdeation(); setStep(WizardStep.MY_IDEAS); }}
+            nextLabel="Änderungen speichern"
+          >
+            <div className="space-y-4">
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
+                <p className="text-amber-700 text-xs font-medium">
+                  ✏️ Bearbeitungsmodus – Änderungen überschreiben die bestehende Datei
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  placeholder="Projektname"
+                  className="w-full p-3 border border-slate-200 rounded-xl text-sm"
+                  value={formData.projectName}
+                  onChange={e => setFormData(f => ({ ...f, projectName: e.target.value }))}
+                />
+                <textarea
+                  rows={2}
+                  placeholder="Problem"
+                  className="w-full p-3 border border-slate-200 rounded-xl text-sm"
+                  value={formData.problemStatement}
+                  onChange={e => setFormData(f => ({ ...f, problemStatement: e.target.value }))}
+                />
+                <textarea
+                  rows={2}
+                  placeholder="Lösung"
+                  className="w-full p-3 border border-slate-200 rounded-xl text-sm"
+                  value={formData.solutionSummary}
+                  onChange={e => setFormData(f => ({ ...f, solutionSummary: e.target.value }))}
+                />
+              </div>
+
+              {editMode?.wantsToChangeImages ? (
+                <PhotoUploadGrid
+                  images={formData.images}
+                  onImagesChange={(imgs) => setFormData(f => ({ ...f, images: imgs }))}
+                />
+              ) : (
+                <div className="mt-4 p-4 bg-slate-50 rounded-xl">
+                  <p className="text-xs text-slate-400 uppercase tracking-widest mb-2">Bestehende Bilder (nicht geändert)</p>
+                  <div className="flex gap-2">
+                    {editMode?.originalImageUrls.slice(0, 3).map((url, i) => (
+                      <div key={i} className="w-16 h-16 bg-slate-200 rounded-lg overflow-hidden">
+                        <img
+                          src={url}
+                          alt={`Bild ${i + 1}`}
+                          className="w-full h-full object-cover"
+                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                        />
+                      </div>
+                    ))}
+                    {(editMode?.originalImageUrls.length || 0) > 3 && (
+                      <div className="w-16 h-16 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 text-xs font-bold">
+                        +{(editMode?.originalImageUrls.length || 0) - 3}
+                      </div>
+                    )}
+                    {(editMode?.originalImageUrls.length || 0) === 0 && (
+                      <p className="text-slate-400 text-sm">Keine Bilder vorhanden</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </WizardCard>
         );
 
       default: return null;

@@ -205,3 +205,134 @@ export const downloadCsvLocally = (idea: NormalizedIdea) => {
   link.click();
   document.body.removeChild(link);
 };
+
+/**
+ * Update an existing file in Google Drive (used for editing ideas)
+ */
+export const updateFileInDrive = async (
+  fileId: string,
+  idea: NormalizedIdea,
+  accessToken: string
+): Promise<void> => {
+  const headers = [
+    "idea_id", "session_uuid", "created_at", "created_by_email", "project_name",
+    "problem_statement", "target_user", "solution_summary", "constraints",
+    "differentiation", "risks", "next_action", "status", "priority",
+    "tags", "source", "version",
+    "image_url_1", "image_url_2", "image_url_3", "image_url_4", "image_url_5",
+    "audio_transcript"
+  ];
+
+  const values = headers.map(h => {
+    const val = (idea as any)[h] || "";
+    return `"${String(val).replace(/"/g, '""')}"`;
+  });
+
+  const csvContent = headers.join(",") + "\n" + values.join(",") + "\n";
+
+  try {
+    const response = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'text/csv'
+        },
+        body: csvContent,
+      }
+    );
+
+    await handleResponse(response);
+    console.log(`[Drive] File ${fileId} updated successfully`);
+  } catch (error: any) {
+    console.error("Drive Update Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * List ideation files for a specific user (filtered by parent folder)
+ */
+export const listIdeationFilesForUser = async (
+  accessToken: string,
+  userEmail: string
+): Promise<any[]> => {
+  try {
+    const folderId = getUserFolderId(userEmail);
+    const query = `'${folderId}' in parents and name contains 'IDEATION_' and mimeType = 'text/csv' and trashed = false`;
+    const encodedQuery = encodeURIComponent(query);
+
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodedQuery}&fields=files(id,name,createdTime)&orderBy=createdTime desc`,
+      {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      }
+    );
+    await handleResponse(response);
+    const data = await response.json();
+    return data.files || [];
+  } catch (error: any) {
+    console.error("List Files For User Error:", error);
+    throw error;
+  }
+};
+
+/**
+ * Parse CSV content into a NormalizedIdea object
+ */
+export const parseCSVToIdea = (csvContent: string): NormalizedIdea => {
+  const lines = csvContent.trim().split('\n');
+  if (lines.length < 2) {
+    throw new Error('Invalid CSV: missing header or data row');
+  }
+
+  // Parse header row
+  const headerLine = lines[0];
+  const headers = parseCSVRow(headerLine);
+
+  // Parse data row
+  const dataLine = lines[1];
+  const values = parseCSVRow(dataLine);
+
+  // Build object from headers and values
+  const result: any = {};
+  headers.forEach((header, index) => {
+    result[header] = values[index] || '';
+  });
+
+  return result as NormalizedIdea;
+};
+
+/**
+ * Helper: Parse a single CSV row (handles quoted values with commas)
+ */
+const parseCSVRow = (row: string): string[] => {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < row.length; i++) {
+    const char = row[i];
+    const nextChar = row[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        // Escaped quote
+        current += '"';
+        i++;
+      } else {
+        // Toggle quote state
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  result.push(current);
+  return result;
+};
+

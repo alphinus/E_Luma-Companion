@@ -253,6 +253,7 @@ export const updateFileInDrive = async (
 
 /**
  * List ideation files for a specific user (filtered by parent folder)
+ * Supports both old format (IDEATION_...) and new format (DATE_AUTHOR_PROJECT_UUID.csv)
  */
 export const listIdeationFilesForUser = async (
   accessToken: string,
@@ -260,8 +261,11 @@ export const listIdeationFilesForUser = async (
 ): Promise<any[]> => {
   try {
     const folderId = getUserFolderId(userEmail);
-    const query = `'${folderId}' in parents and name contains 'IDEATION_' and mimeType = 'text/csv' and trashed = false`;
+    // Query all CSV files in the user's folder (not just IDEATION_ prefix)
+    const query = `'${folderId}' in parents and mimeType = 'text/csv' and trashed = false`;
     const encodedQuery = encodeURIComponent(query);
+
+    console.log(`[Drive] Listing files for ${userEmail} in folder ${folderId}`);
 
     const response = await fetch(
       `https://www.googleapis.com/drive/v3/files?q=${encodedQuery}&fields=files(id,name,createdTime)&orderBy=createdTime desc`,
@@ -271,6 +275,7 @@ export const listIdeationFilesForUser = async (
     );
     await handleResponse(response);
     const data = await response.json();
+    console.log(`[Drive] Found ${data.files?.length || 0} files`);
     return data.files || [];
   } catch (error: any) {
     console.error("List Files For User Error:", error);

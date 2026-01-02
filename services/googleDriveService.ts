@@ -265,18 +265,33 @@ export const listIdeationFilesForUser = async (
     const query = `'${folderId}' in parents and mimeType = 'text/csv' and trashed = false`;
     const encodedQuery = encodeURIComponent(query);
 
-    console.log(`[Drive] Listing files for ${userEmail} in folder ${folderId}`);
+    console.log(`[Drive] Listing ALL files for ${userEmail} in folder ${folderId}`);
 
-    const response = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${encodedQuery}&fields=files(id,name,createdTime)&orderBy=createdTime desc`,
-      {
-        headers: { 'Authorization': `Bearer ${accessToken}` }
+    let allFiles: any[] = [];
+    let pageToken: string | undefined = undefined;
+
+    // Paginate through ALL results
+    do {
+      const pageTokenParam = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : '';
+      const response = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${encodedQuery}&fields=nextPageToken,files(id,name,createdTime)&orderBy=createdTime desc&pageSize=100${pageTokenParam}`,
+        {
+          headers: { 'Authorization': `Bearer ${accessToken}` }
+        }
+      );
+      await handleResponse(response);
+      const data = await response.json();
+
+      if (data.files && data.files.length > 0) {
+        allFiles = allFiles.concat(data.files);
       }
-    );
-    await handleResponse(response);
-    const data = await response.json();
-    console.log(`[Drive] Found ${data.files?.length || 0} files`);
-    return data.files || [];
+
+      pageToken = data.nextPageToken;
+      console.log(`[Drive] Fetched ${data.files?.length || 0} files, total so far: ${allFiles.length}, hasMore: ${!!pageToken}`);
+    } while (pageToken);
+
+    console.log(`[Drive] Total files found for ${userEmail}: ${allFiles.length}`);
+    return allFiles;
   } catch (error: any) {
     console.error("List Files For User Error:", error);
     throw error;

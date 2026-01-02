@@ -309,10 +309,9 @@ const App: React.FC = () => {
       const updatedIdeas: SavedIdea[] = [];
       const filesToFetch: any[] = [];
 
-      // Limit to 20 files
-      const topFiles = driveFiles.slice(0, 20);
+      console.log(`[MyIdeas] Processing ${driveFiles.length} files from Google Drive`);
 
-      for (const file of topFiles) {
+      for (const file of driveFiles) {
         const cachedIdea = currentList.find((i: SavedIdea) => i.fileId === file.id);
 
         // If file exists and not changed, reuse cached data
